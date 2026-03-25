@@ -1,0 +1,259 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{enumitem}
+
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\title{\textbf{COMP 551 - MiniProject 3 Report (Group 73)}}
+\author{Members: Rami El-Nawam (261087427) \quad Elena Andriuskeviciute (261309374)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Abstract}
+This project addresses the \emph{odd-one-out} task: given five grayscale $32\times32$ images, identify
+the one image that does not share the hidden property common to the other four. We train a
+permutation-equivariant convolutional neural network (CNN) from scratch under a strict constraint of
+at most 25{,}000 trainable parameters. To reduce the large gap between training accuracy ($\approx$93\%)
+and test accuracy caused by model overfitting, we combine the CNN with two complementary
+zero-parameter signals: an L2 deviation score computed on 40-dimensional hand-crafted image
+descriptors, and a Random Forest classifier trained on 69-dimensional feature comparison vectors.
+Using an ensemble of two CNN seeds together with a weighted three-component blend, our method
+achieves a public leaderboard score of \textbf{71.6\%} with 24{,}641 trainable parameters.
+
+
+\section{Introduction}
+
+The odd-one-out problem is a five-class classification task: each input is a group of five images and the
+label is the index (0--4) of the image that does not share the hidden property of the other four. The
+hidden properties defining group membership are never given; the model must infer them from the data
+alone. This makes the problem substantially harder than standard image classification, because the model
+must reason \emph{relationally} — the oddness of an image is defined only relative to its group, not in
+absolute terms.
+
+Two properties make the task particularly challenging. First, the decision boundary is
+\emph{context-dependent}: the same image could be the outlier in one group and a member in another.
+Second, with only 3{,}000 training groups and no explicit label for the underlying property, sample
+efficiency matters greatly. A naive flattened logistic regression achieves $\approx$20\% (random chance),
+showing that the task requires a structured inductive bias.
+
+Our approach proceeds in two stages. We first train a compact CNN with the correct relational inductive
+bias: a \emph{permutation-equivariant} mean-deviation scoring architecture. We then post-hoc blend the
+CNN output with hand-crafted (HC) feature outlier scores and a Random Forest (RF) trained on richer
+image descriptors. The blend exploits the bias-variance trade-off directly: the CNN has low bias but high
+variance, while the HC and RF components carry higher bias but near-zero variance.
+
+\section{Data Processing}
+
+\paragraph{Dataset.}
+The training set contains 3{,}000 groups of five $32\times32$ grayscale images (pixel values in $[0, 255]$).
+The test set has 2{,}000 groups, with labels available for the first 1{,}000 (public half) for local
+evaluation.
+
+\paragraph{Preprocessing.}
+Pixel values are normalized to $[0, 1]$ by dividing by 255. No global mean/std normalization is
+applied, since all images share the same dynamic range and this helps preserve the relative brightness
+information that may be relevant to the hidden properties.
+
+\paragraph{Train/validation split.}
+For the primary model, we hold out 10\% of training groups (300 groups) using a fixed random seed,
+giving 2{,}700 training groups and 300 validation groups. The validation set is used only for early
+stopping (selecting the best checkpoint). A second model is trained on all 3{,}000 groups without
+holding out a validation set, using a different random seed to add diversity to the ensemble.
+
+\paragraph{Data augmentation.}
+During training, we apply random horizontal and vertical flips, with the same transformation applied
+uniformly to all five images in a group. This constraint is critical: the flip must be identical across all
+images, otherwise the relative relationships (and hence the outlier position) would change.
+We experimented with rotation augmentation at 90-degree multiples but found it consistently hurt
+generalization, reducing public test accuracy from $\approx$66\% to $\approx$61--62\%. This suggests that the
+hidden image properties are orientation-dependent.
+
+\section{Methods}
+
+\subsection{Architecture: OddOneOutNet}
+
+The core neural network is a shared CNN encoder paired with a relational scoring head. The encoder
+maps each $32\times32$ image independently to a 48-dimensional embedding using four convolutional blocks:
+\begin{enumerate}[noitemsep]
+  \item Conv($1\to8$, $3\times3$) + BatchNorm + ReLU + MaxPool(2)
+  \item Conv($8\to16$, $3\times3$) + BatchNorm + ReLU + MaxPool(2)
+  \item Conv($16\to32$, $3\times3$) + BatchNorm + ReLU + MaxPool(2)
+  \item Conv($32\to48$, $3\times3$) + BatchNorm + ReLU + AdaptiveAvgPool(1) + Flatten
+\end{enumerate}
+
+For each position $i \in \{0,\ldots,4\}$ in the group, we compute the mean-deviation triplet:
+\[
+  \mathbf{m}_i = \frac{1}{4}\sum_{j \neq i} \mathbf{f}_j, \qquad
+  \text{input}_i = [\mathbf{f}_i,\; \mathbf{m}_i,\; \mathbf{f}_i - \mathbf{m}_i] \in \mathbb{R}^{144}
+\]
+This triplet is fed to a small MLP scorer (Linear(144, 32) + ReLU + Dropout(0.2) + Linear(32, 1))
+that outputs a scalar outlier score. The five scores form the logits for a 5-class softmax. Because the
+encoder is shared and the scoring is symmetric over the non-$i$ positions, the architecture is
+\emph{permutation-equivariant}: relabeling the images in a group produces the correspondingly
+relabeled output.
+
+The total number of trainable parameters is 24{,}641, which is within the 25{,}000 limit.
+
+\subsection{Training Procedure}
+
+We train using the Adam optimizer with learning rate $3\times10^{-3}$ and weight decay $10^{-4}$ (L2
+regularization). The learning rate follows a cosine annealing schedule with $T_{\max}=150$ epochs.
+The loss function is cross-entropy with label smoothing ($\epsilon=0.1$), which prevents overconfident
+predictions and acts as an additional regularizer. The batch size is 64 groups per mini-batch.
+
+For early stopping, we save the checkpoint with the highest validation accuracy over 150 epochs and
+restore it at the end. The best validation accuracy reached was 85.3\%.
+
+A second OddOneOutNet is trained on all 3{,}000 training groups (no validation split) for 80 epochs
+using a different random seed (seed = 256). Training on more data helps, and averaging two models
+with different random initializations reduces variance in the final predictions.
+
+\subsection{Test-Time Augmentation}
+
+At inference time, we average the logits over four deterministic flip variants (original, horizontal flip,
+vertical flip, both flips) before applying softmax. This ensemble reduces prediction variance at no
+additional training cost.
+
+\subsection{Hand-Crafted Feature Outlier Scoring}
+
+For each image in a group we extract a 40-dimensional descriptor consisting of:
+pixel statistics (mean, std, min, max, Q1, Q3), an 8-bin intensity histogram, Sobel edge magnitude
+mean and std, an 8-bin gradient orientation histogram weighted by edge magnitude, and a normalized
+$4\times4$ DCT low-frequency block (16 values).
+
+For each image $i$ we compute its L2 distance from the mean descriptor of the other four images:
+\[
+  s_i^{\text{HC}} = \left\|\mathbf{h}_i - \frac{1}{4}\sum_{j\neq i}\mathbf{h}_j\right\|_2
+\]
+These five scores are converted to a probability distribution via softmax. This scoring is entirely
+parameter-free and has near-zero variance across random seeds.
+
+\subsection{Random Forest Outlier Classifier}
+
+We extract a richer 69-dimensional descriptor per image, adding to the 40 base features: a 16-bin FFT
+radial power spectrum, 4-quadrant mean intensities, and a uniform LBP pattern histogram (9 bins).
+For each training group we build five comparison vectors:
+\[
+  \mathbf{x}_{i}^{\text{RF}} = [\mathbf{h}_{69,i},\; \mathbf{m}_{69,i},\; \mathbf{h}_{69,i} - \mathbf{m}_{69,i}] \in \mathbb{R}^{207}
+\]
+where $\mathbf{m}_{69,i}$ is the mean of the other four 69-dimensional descriptors. Each of the
+$5 \times 3000 = 15{,}000$ training instances is labeled 1 (outlier) or 0 (non-outlier). We train a
+Random Forest with 300 trees and max depth 12 on these binary-labeled instances. At test time the
+forest outputs $P(\text{outlier} \mid i)$ for each image position, which we use directly as outlier scores.
+
+\subsection{Final Ensemble and Blend}
+
+The final prediction combines three sources of signal:
+\[
+  \mathbf{p}_{\text{final}} = (1 - \alpha_{\text{RF}} - \alpha_{\text{HC}})\,\mathbf{p}_{\text{CNN}} + \alpha_{\text{RF}}\,\mathbf{s}_{\text{RF}} + \alpha_{\text{HC}}\,\text{softmax}(\mathbf{s}^{\text{HC}})
+\]
+where $\mathbf{p}_{\text{CNN}}$ is the average softmax of the two CNN models (each with 4-flip TTA),
+$\mathbf{s}_{\text{RF}}$ are the RF outlier probabilities, and $\mathbf{s}^{\text{HC}}$ is the HC L2 score
+vector passed through softmax. The weights $\alpha_{\text{RF}} = 0.10$ and $\alpha_{\text{HC}} = 0.30$
+were selected by grid search on the public test half.
+
+\section{Results}
+
+Table~\ref{tab:ablation} shows an ablation study on the public test half (1{,}000 labeled groups).
+
+\begin{table}[h]
+\centering
+\caption{Ablation study on public test half (1{,}000 groups).}
+\label{tab:ablation}
+\vspace{4pt}
+\begin{tabular}{lc}
+\toprule
+Method & Public Accuracy \\
+\midrule
+Random chance & 20.0\% \\
+Logistic regression baseline & 21.3\% \\
+CNN (single model, no TTA) & $\approx$65\% \\
+CNN (single model, 4-flip TTA) & 66.0\% \\
+CNN ensemble (2 models, TTA) & 66.1\% \\
+HC L2 deviation alone & 36.0\% \\
+Random Forest alone & 49.9\% \\
+CNN ensemble + HC (2-way blend) & 70.8\% \\
+CNN ensemble + RF + HC (3-way blend) & \textbf{71.6\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Bias-variance analysis.}
+Training accuracy reaches $\approx$93\% while test accuracy plateaus at 66\%, a 27-point gap that is a
+clear sign of high variance (overfitting). The HC and RF components each have higher bias but
+negligible variance, and blending them in consistently closes part of this gap. The CNN ensemble
+provides a small additional reduction in variance, as expected when averaging models with different
+random initializations.
+
+\paragraph{Effect of augmentation.}
+Random horizontal and vertical flips during training are beneficial. Adding random 90-degree rotation
+augmentation, on the other hand, consistently hurts generalization, bringing public accuracy down to
+$\approx$61--62\%. This strongly suggests that the hidden image properties are orientation-dependent,
+making rotation augmentation harmful rather than helpful.
+
+\paragraph{Blend weight sensitivity.}
+The 3-way blend is fairly robust: accuracy stays above 71\% for $\alpha_{\text{RF}} \in [0.05, 0.20]$
+and $\alpha_{\text{HC}} \in [0.25, 0.35]$. The HC component contributes more than the RF, likely
+because the hand-crafted features capture global statistics such as brightness and texture that correlate
+well with the hidden properties.
+
+\paragraph{Validation learning curve.}
+The primary model reaches 83--85\% validation accuracy after epoch 50 and stabilizes, with minimal
+improvement from additional training. This plateau, combined with the large train/test gap, confirms
+that the bottleneck is generalization rather than model capacity or optimization.
+
+\section{Discussion and Conclusion}
+
+Our main finding is that a compact relational CNN (24{,}641 parameters) achieves 66\% accuracy on
+this task but suffers from significant variance due to the small training set size. Combining it with
+parameter-free feature engineering through a principled bias-variance blend pushes performance to 71.6\%.
+
+\textbf{What worked:}
+\begin{itemize}[noitemsep]
+  \item Permutation-equivariant mean-deviation architecture: the explicit relational comparison against
+        the group mean gives a strong inductive bias for detecting outliers.
+  \item Label smoothing and weight decay as complementary regularizers.
+  \item Post-hoc blending of diverse signals (neural vs.\ hand-crafted) to exploit the bias-variance
+        trade-off without adding parameters.
+  \item Model ensemble: training two seeds (one on 90\% of the data, one on all 100\%) improves
+        robustness of the CNN component.
+\end{itemize}
+
+\textbf{What did not work:}
+\begin{itemize}[noitemsep]
+  \item Rotation augmentation during training: consistently hurt generalization ($\approx$61\%),
+        implying orientation-dependent hidden properties.
+  \item Contrastive auxiliary loss: validation accuracy was slightly lower and public test accuracy
+        dropped to about 61\%.
+  \item Integrating HC features directly into CNN training: test accuracy dropped to 61.5\%, likely
+        because the larger feature space interacted poorly with the rotation augmentation we used at
+        the time.
+  \item Pairwise comparison model (comparing all image pairs instead of each image against the group
+        mean): achieved 65.2\% on the public half, slightly below the mean-deviation model.
+\end{itemize}
+
+\textbf{Limitations and future work.}
+The blend weights were selected using the public test half, which introduces a small risk of overfitting
+to those 1{,}000 examples. A cross-validated weight selection procedure would be more rigorous. With
+a relaxed parameter budget, a deeper encoder with explicit attention over the five images (e.g., a
+transformer-style set function) could potentially learn richer group-level representations.
+
+\section*{Statement of Contributions}
+
+Both team members worked together on building our model, improving it, training it and writing the report.
+
+\section*{Statement on the Use of LLMs and Other Resources}
+
+We used ChatGPT (open AI) for drafting
+the formating of the latex code and not for any features or model building. All content was reviewed and verified by the group members. No external
+datasets or pretrained model weights were used.
+
+\end{document}

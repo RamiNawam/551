@@ -11,7 +11,15 @@
       "Bash(pip3 install:*)",
       "Bash(python3 -c \"import torch; print\\(''torch:'', torch.__version__\\)\")",
       "Bash(python3 -c \":*)",
-      "Bash(python3 -:*)"
+      "Bash(python3 -:*)",
+      "Bash(brew install:*)",
+      "Bash(/Library/TeX/texbin/pdflatex --version)",
+      "Bash(pandoc --version)",
+      "Bash(python3 blend3way.py)",
+      "Bash(pdftoppm -v)",
+      "Bash(pdftotext \"/Users/rami/551/writeups/writeup \\(1\\).pdf\" -)",
+      "Bash(pdftotext \"/Users/rami/551/writeups/Report_2_COMP551.pdf\" -)",
+      "Bash(tectonic report.tex)"
     ]
   }
 }
