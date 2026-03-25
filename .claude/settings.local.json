@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp /Users/rami/Downloads/x_train.npy /Users/rami/Downloads/x_test.npy /Users/rami/Downloads/y_train.npy /Users/rami/Downloads/y_test.npy /Users/rami/551/datasets/)",
+      "Bash(cp /Users/rami/Downloads/assignment3.ipynb /Users/rami/551/assignment3.ipynb)",
+      "Bash(python -c \"import torch; import numpy as np; print\\(''torch:'', torch.__version__\\); print\\(''numpy:'', np.__version__\\); x = np.load\\(''datasets/x_train.npy''\\); print\\(''x_train shape:'', x.shape\\)\")",
+      "Bash(python3 -c \"import torch; import numpy as np; print\\(''torch:'', torch.__version__\\); x = np.load\\(''datasets/x_train.npy''\\); print\\(''x_train shape:'', x.shape\\)\")",
+      "Bash(conda info:*)",
+      "Read(//Users/rami/miniconda3/**)",
+      "Read(//Users/rami/anaconda3/**)",
+      "Bash(pip3 install:*)",
+      "Bash(python3 -c \"import torch; print\\(''torch:'', torch.__version__\\)\")",
+      "Bash(python3 -c \":*)",
+      "Bash(python3 -:*)"
+    ]
+  }
+}
